@@ -495,7 +495,7 @@ def main():
     enable_windows_ansi()
     print_banner()
 
-   if "--update" in sys.argv:
+    if "--update" in sys.argv:
         print("Atualizando o SpotiDown...")
         
         if shutil.which("pipx"):
