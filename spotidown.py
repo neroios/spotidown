@@ -210,7 +210,6 @@ def fetch_odesli(url):
 
 # ── Metadados: iTunes Search API (tracklist completa, sem auth) ───────────────
 def fetch_itunes(artist, album):
-    # Busca com album + artista
     term   = (artist + " " + album).strip()
     params = urlencode({"term": term, "media": "music", "entity": "song",
                         "limit": "200", "country": "BR"})
@@ -222,24 +221,22 @@ def fetch_itunes(artist, album):
     album_low  = album.lower()
     artist_low = artist.lower()
 
-    # 1. Tenta encontrar pelo nome EXATO do álbum (evita misturar Rebirth com Rebirth Live)
+    # 1. Tenta nome EXATO
     matched = [r for r in results
                if album_low == r.get("collectionName", "").lower()
                and artist_low in r.get("artistName", "").lower()]
 
-    # 2. Se não achar exato, relaxa para 'contém o nome'
+    # 2. Relaxa para 'contém' e bloqueia ao vivos se o pedido for estúdio
     if not matched:
         matched = [r for r in results
                    if album_low in r.get("collectionName", "").lower()
                    and artist_low in r.get("artistName", "").lower()]
-        
-        # Como relaxamos a busca, removemos os álbuns ao vivo/deluxe se o original não pedir
         if "live" not in album_low and "vivo" not in album_low:
             matched = [r for r in matched 
                        if "live" not in r.get("collectionName", "").lower() 
                        and "vivo" not in r.get("collectionName", "").lower()]
 
-    # 3. Relaxa apenas para o artista
+    # 3. Relaxa só para o artista
     if not matched:
         matched = [r for r in results
                    if artist_low in r.get("artistName", "").lower()]
@@ -247,7 +244,6 @@ def fetch_itunes(artist, album):
     if not matched:
         matched = results
 
-    # Organiza pela ordem original do CD
     matched.sort(key=lambda r: (r.get("discNumber", 1), r.get("trackNumber", 999)))
 
     seen, tracks = set(), []
@@ -255,14 +251,14 @@ def fetch_itunes(artist, album):
         title = r.get("trackName", "")
         art   = r.get("artistName", artist)
         
-        # Filtra sufixos (agora com suporte a português: vivo, acústico)
+        # Filtra os nomes sujos
         clean_title = re.sub(r'(?i)\s*[\(\-\[].*?(remaster|live|vivo|deluxe|bonus|edit|ac[uú]stico|acoustic).*?[\)\-\]]', '', title).strip()
-        
         key_t = clean_title.lower()
         
         if clean_title and key_t not in seen:
             seen.add(key_t)
-            query_str = art + " - " + clean_title 
+            # MÁGICA AQUI: Adiciona a palavra "Topic" na busca oculta
+            query_str = art + " - " + clean_title + " Topic"
             tracks.append({"title": clean_title, "artist": art,
                            "query": query_str})
             
@@ -451,7 +447,7 @@ def download_track(query, out_dir, index):
         "--output", out_template,
         "--quiet",
         "--no-warnings",
-        "ytmsearch1:" + query,
+        "ytsearch1:" + query, # <-- Voltamos para o YT normal!
     ]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,
