@@ -496,7 +496,7 @@ def main():
 
     if "--update" in sys.argv:
         print("Atualizando o SpotiDown...")
-        subprocess.run(["pipx", "upgrade", "spotidown"])
+        subprocess.run([sys.executable, "-m", "pipx", "upgrade", "spotidown"])
         sys.exit(0)
 
     parser = argparse.ArgumentParser(
