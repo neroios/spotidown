@@ -262,7 +262,7 @@ def fetch_itunes(artist, album):
         
         if clean_title and key_t not in seen:
             seen.add(key_t)
-            query_str = art + " - " + clean_title + " official audio"
+            query_str = art + " - " + clean_title 
             tracks.append({"title": clean_title, "artist": art,
                            "query": query_str})
             
