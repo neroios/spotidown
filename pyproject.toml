@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spotidown"
+version = "1.0.0"
+description = "Baixa playlists e álbuns do Spotify via YouTube."
+dependencies = [
+    "yt-dlp"
+]
+
+[project.scripts]
+# Aqui é onde a mágica acontece. Diz ao pip: 
+# "Crie um comando global chamado 'spotidown' que roda a função 'main' do arquivo 'spotidown.py'"
+spotidown = "spotidown:main"
+
+[tool.setuptools]
+py-modules = ["spotidown"]
