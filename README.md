@@ -21,11 +21,15 @@ Sem conta Premium. Sem API key. Funciona em Windows, Linux e macOS.
 **Windows** (PowerShell):
 ```
 python instalar.py
+ou
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/neroios/spotidown/main/instalar.py" -OutFile "instalar.py"; python instalar.py
 ```
 
 **Linux / macOS** (Terminal):
 ```
 python3 instalar.py
+ou
+curl -O https://raw.githubusercontent.com/neroios/spotidown/main/instalar.py && python3 instalar.py
 ```
 
 O instalador cuida de tudo:
