@@ -451,7 +451,7 @@ def download_track(query, out_dir, index):
         "--output", out_template,
         "--quiet",
         "--no-warnings",
-        "ytsearch1:" + query,
+        "ytmsearch1:" + query,
     ]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,
