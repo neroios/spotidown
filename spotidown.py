@@ -14,6 +14,7 @@ Requer apenas Python 3.10+ instalado. O resto e instalado automaticamente.
 
 import re
 import sys
+import os
 import json
 import shutil
 import zipfile
@@ -494,10 +495,21 @@ def main():
     enable_windows_ansi()
     print_banner()
 
-    if "--update" in sys.argv:
+   if "--update" in sys.argv:
         print("Atualizando o SpotiDown...")
-        subprocess.run([sys.executable, "-m", "pipx", "upgrade", "spotidown"])
-        sys.exit(0)
+        
+        if shutil.which("pipx"):
+            subprocess.run(["pipx", "upgrade", "spotidown"])
+        
+        else:
+            if sys.platform == "win32":
+                python_global = os.path.join(sys.base_prefix, "python.exe")
+            else:
+                python_global = os.path.join(sys.base_prefix, "bin", "python3")
+                
+            subprocess.run([python_global, "-m", "pipx", "upgrade", "spotidown"])
+            
+        sys.exit(0) 
 
     parser = argparse.ArgumentParser(
         prog="spotidown",
