@@ -222,12 +222,24 @@ def fetch_itunes(artist, album):
     album_low  = album.lower()
     artist_low = artist.lower()
 
-    # Tenta filtrar pelo album exato
+    # 1. Tenta encontrar pelo nome EXATO do álbum (evita misturar Rebirth com Rebirth Live)
     matched = [r for r in results
-               if album_low in r.get("collectionName", "").lower()
+               if album_low == r.get("collectionName", "").lower()
                and artist_low in r.get("artistName", "").lower()]
 
-    # Relaxa: so artista
+    # 2. Se não achar exato, relaxa para 'contém o nome'
+    if not matched:
+        matched = [r for r in results
+                   if album_low in r.get("collectionName", "").lower()
+                   and artist_low in r.get("artistName", "").lower()]
+        
+        # Como relaxamos a busca, removemos os álbuns ao vivo/deluxe se o original não pedir
+        if "live" not in album_low and "vivo" not in album_low:
+            matched = [r for r in matched 
+                       if "live" not in r.get("collectionName", "").lower() 
+                       and "vivo" not in r.get("collectionName", "").lower()]
+
+    # 3. Relaxa apenas para o artista
     if not matched:
         matched = [r for r in results
                    if artist_low in r.get("artistName", "").lower()]
@@ -235,6 +247,7 @@ def fetch_itunes(artist, album):
     if not matched:
         matched = results
 
+    # Organiza pela ordem original do CD
     matched.sort(key=lambda r: (r.get("discNumber", 1), r.get("trackNumber", 999)))
 
     seen, tracks = set(), []
@@ -242,20 +255,19 @@ def fetch_itunes(artist, album):
         title = r.get("trackName", "")
         art   = r.get("artistName", artist)
         
-        # Filtra sufixos como (Remastered), - Live, [Deluxe] para limpar o nome
-        clean_title = re.sub(r'(?i)\s*[\(\-\[].*?(remaster|live|deluxe|bonus|edit).*?[\)\-\]]', '', title).strip()
+        # Filtra sufixos (agora com suporte a português: vivo, acústico)
+        clean_title = re.sub(r'(?i)\s*[\(\-\[].*?(remaster|live|vivo|deluxe|bonus|edit|ac[uú]stico|acoustic).*?[\)\-\]]', '', title).strip()
         
-        # Usa o nome limpo como chave para evitar duplicatas
-        # (ex: "Música" e "Música (Remastered)" se tornarão a mesma coisa e a 2ª será ignorada)
         key_t = clean_title.lower()
         
         if clean_title and key_t not in seen:
             seen.add(key_t)
-            # Adiciona "official audio" na busca oculta do YouTube para fugir de shows ao vivo
             query_str = art + " - " + clean_title + " official audio"
-            tracks.append({"title": clean_title, "artist": art, "query": query_str})
+            tracks.append({"title": clean_title, "artist": art,
+                           "query": query_str})
             
     return tracks
+    
 # ── Metadados: MusicBrainz (fallback) ────────────────────────────────────────
 def fetch_musicbrainz(artist, album):
     queries = [
