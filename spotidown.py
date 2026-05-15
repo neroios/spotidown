@@ -494,6 +494,11 @@ def main():
     enable_windows_ansi()
     print_banner()
 
+    if "--update" in sys.argv:
+        print("Atualizando o SpotiDown...")
+        subprocess.run(["pipx", "upgrade", "spotidown"])
+        sys.exit(0)
+
     parser = argparse.ArgumentParser(
         prog="spotidown",
         description="Baixa playlists/albuns do Spotify via YouTube. Sem Premium, sem API key.",
