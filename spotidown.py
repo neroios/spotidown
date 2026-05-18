@@ -545,7 +545,7 @@ def main():
     if args.nome:
         zip_name = safe_filename(args.nome)
     elif meta.get("name") and meta.get("artist"):
-        zip_name = safe_filename(meta["name"] + " - " + meta["artist"])
+        zip_name = safe_filename(meta["artist"] + " - " + meta["name"])
     else:
         zip_name = safe_filename(meta.get("name", "download"))
 
