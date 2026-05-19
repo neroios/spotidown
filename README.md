@@ -19,22 +19,19 @@ Sem conta Premium. Sem API key. Funciona em Windows, Linux e macOS.
 ### Instalar o SpotiDown
 
 **Windows** (PowerShell):
-```
-python instalar.py
-```
-Ou
+
 ```
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/neroios/spotidown/main/instalar.py" -OutFile "instalar.py"; python instalar.py
 ```
 
+ou execute o instalador: python instalar.py
+
 **Linux / macOS** (Terminal):
-```
-python3 instalar.py
-```
-Ou
 ```
 curl -O https://raw.githubusercontent.com/neroios/spotidown/main/instalar.py && python3 instalar.py
 ```
+ou execute o instalador: python3 instalar.py
+
 
 O instalador cuida de tudo:
 - instala pipx
