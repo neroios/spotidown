@@ -23,7 +23,7 @@ IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
 IS_LIN = sys.platform == "linux"
 
-REPO = "git+https://github.com/neroios/spotidown"
+REPO = "https://github.com/neroios/spotidown/archive/refs/heads/main.zip"
 
 # ── Cores ─────────────────────────────────────────────────────────────────────
 class C:
@@ -328,48 +328,53 @@ def print_success():
     print()
 
 def ensure_linux_base():
-    """Garante que pacotes vitais do sistema (git, pip, venv) existam no Linux."""
+    """Garante pacotes base (git, pip, venv) detectando a distro do usuário."""
     if not IS_LIN:
         return
 
     step("Verificando pacotes base do Linux...")
-    deps_to_install = []
-
-    # 1. Verifica o Git
-    if not shutil.which("git"):
-        deps_to_install.append("git")
-
-    # 2. Verifica o venv
-    success, _ = run(sys.executable, "-c", "import venv")
-    if not success:
-        deps_to_install.append("python3-venv")
-
-    # 3. Verifica o pip do sistema
-    success, _ = run(sys.executable, "-m", "pip", "--version")
-    if not success:
-        deps_to_install.append("python3-pip")
-
-    if deps_to_install:
-        info(f"Faltam pacotes do sistema: {', '.join(deps_to_install)}")
-        
-        # Tenta instalar via apt (Debian/Ubuntu)
-        if shutil.which("apt-get"):
-            info("Instalando via apt-get (pode pedir senha sudo)...")
-            run("sudo", "apt-get", "update", "-qq")
-            success, _ = run("sudo", "apt-get", "install", "-y", "-qq", *deps_to_install)
-            if success:
-                ok("Pacotes base instalados com sucesso!")
-            else:
-                err("Falha ao instalar pacotes base.")
-                print(c(f"    → Rode manualmente: sudo apt install {' '.join(deps_to_install)}", C.CYAN))
-                sys.exit(1)
-        else:
-            err("Gerenciador de pacotes não suportado. Instale manualmente:")
-            print(c(f"    → {', '.join(deps_to_install)}", C.CYAN))
-            sys.exit(1)
-    else:
+    
+    # 1. Testa se o sistema já tem o que precisamos
+    needs_git = not shutil.which("git")
+    success_venv, _ = run(sys.executable, "-c", "import venv")
+    success_pip, _ = run(sys.executable, "-m", "pip", "--version")
+    
+    if not needs_git and success_venv and success_pip:
         ok("Pacotes base do Linux OK")
+        return
 
+    info("Faltam dependências. Detectando gerenciador de pacotes...")
+
+    # Mapeamento: (Comando, Lista de argumentos para instalar, Pacotes daquela distro)
+    managers = [
+        ("apt-get", ["sudo", "apt-get", "install", "-y", "-qq"], ["git", "python3-venv", "python3-pip"]),
+        ("pacman",  ["sudo", "pacman", "-S", "--noconfirm"],     ["git", "python-pip"]), # Arch tem venv nativo
+        ("dnf",     ["sudo", "dnf", "install", "-y", "-q"],      ["git", "python3-pip"]),
+        ("zypper",  ["sudo", "zypper", "install", "-y", "-q"],   ["git", "python3-pip"]),
+        ("apk",     ["sudo", "apk", "add", "-q"],                ["git", "py3-pip"])
+    ]
+
+    for pkg_mgr, cmd_base, pkgs in managers:
+        if shutil.which(pkg_mgr):
+            info(f"Instalando via {pkg_mgr} (pode pedir senha sudo)...")
+            
+            # Se for apt, roda o update primeiro para evitar erros de repositório velho
+            if pkg_mgr == "apt-get":
+                run("sudo", "apt-get", "update", "-qq")
+                
+            success, out = run(*(cmd_base + pkgs))
+            if success:
+                ok(f"Pacotes base instalados via {pkg_mgr}!")
+                return
+            else:
+                err(f"Falha ao instalar via {pkg_mgr}.")
+                print(c(f"    Saída: {out[:300]}", C.DIM))
+                sys.exit(1)
+                
+    err("Gerenciador de pacotes não reconhecido.")
+    print(c("    → Por favor, instale 'git' e o 'pip' do Python manualmente.", C.CYAN))
+    sys.exit(1)
+    
 def main():
     enable_ansi()
     print(c("\n  ♫ SpotiDown — Instalador Universal", C.GREEN, C.BOLD))
