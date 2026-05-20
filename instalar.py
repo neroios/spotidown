@@ -23,6 +23,7 @@ IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
 IS_LIN = sys.platform == "linux"
 
+# Download direto do ZIP (elimina a necessidade do 'git' estar instalado)
 REPO = "https://github.com/neroios/spotidown/archive/refs/heads/main.zip"
 
 # ── Cores ─────────────────────────────────────────────────────────────────────
@@ -71,6 +72,29 @@ def tool_is_working(cmd, test_flag="-version"):
     success, _ = run(cmd, test_flag)
     return success
 
+def add_to_windows_path(new_dir: str):
+    """
+    Adiciona um diretório ao PATH do usuário via Registro do Windows.
+    Substitui o 'setx' para evitar o bug de truncamento de 1024 caracteres.
+    """
+    if not IS_WIN: return
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment", 0, winreg.KEY_ALL_ACCESS) as key:
+            try:
+                current_path, _ = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                current_path = ""
+            
+            # Se a pasta já não estiver no PATH, adicionamos de forma segura
+            if new_dir.lower() not in current_path.lower():
+                sep = ";" if current_path and not current_path.endswith(";") else ""
+                updated_path = current_path + sep + new_dir
+                winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, updated_path)
+                os.environ["PATH"] += f";{new_dir}"  # Atualiza na sessão atual também
+    except Exception as e:
+        info(f"Falha ao modificar PATH no Registro: {e}")
+
 # ── Verificações ──────────────────────────────────────────────────────────────
 def check_python_version():
     step("Verificando Python...")
@@ -81,6 +105,51 @@ def check_python_version():
             print(c("    → Baixe em: https://python.org/downloads", C.CYAN))
         sys.exit(1)
     ok(f"Python {major}.{minor} OK")
+
+def ensure_linux_base():
+    """Garante pacotes base (pip, venv, pipx) detectando a distro do usuário."""
+    if not IS_LIN:
+        return
+
+    step("Verificando pacotes base do Linux...")
+    
+    success_venv, _ = run(sys.executable, "-c", "import venv")
+    success_pip, _ = run(sys.executable, "-m", "pip", "--version")
+    
+    if success_venv and success_pip:
+        ok("Pacotes base do Linux OK")
+        return
+
+    info("Faltam dependências. Detectando gerenciador de pacotes...")
+
+    # Mapeamento para as distros mais populares (sem precisar forçar o 'git')
+    managers = [
+        ("apt-get", ["sudo", "apt-get", "install", "-y", "-qq"], ["python3-venv", "python3-pip"]),
+        ("pacman",  ["sudo", "pacman", "-S", "--noconfirm", "--needed"], ["python-pip", "python-pipx"]),
+        ("dnf5",    ["sudo", "dnf5", "install", "-y", "-q"], ["python3-pip"]),
+        ("dnf",     ["sudo", "dnf", "install", "-y", "-q"], ["python3-pip"]),
+        ("zypper",  ["sudo", "zypper", "install", "-y", "-q"], ["python3-pip"]),
+        ("apk",     ["sudo", "apk", "add", "-q"], ["py3-pip"])
+    ]
+
+    for pkg_mgr, cmd_base, pkgs in managers:
+        if shutil.which(pkg_mgr):
+            info(f"Instalando via {pkg_mgr} (pode pedir senha sudo)...")
+            if pkg_mgr == "apt-get":
+                run("sudo", "apt-get", "update", "-qq")
+                
+            success, out = run(*(cmd_base + pkgs))
+            if success:
+                ok(f"Pacotes base instalados via {pkg_mgr}!")
+                return
+            else:
+                err(f"Falha ao instalar via {pkg_mgr}.")
+                print(c(f"    Saída: {out[:300]}", C.DIM))
+                sys.exit(1)
+                
+    err("Gerenciador de pacotes não reconhecido.")
+    print(c("    → Por favor, instale o 'pip' e o 'venv' do Python manualmente.", C.CYAN))
+    sys.exit(1)
 
 def ensure_pip():
     """Garante que pip está disponível."""
@@ -102,7 +171,7 @@ def ensure_pipx() -> list:
         ok("pipx disponível via python -m pipx")
         return [sys.executable, "-m", "pipx"]
 
-    info("pipx não encontrado. Instalando...")
+    info("pipx não encontrado. Instalando via pip...")
     ensure_pip()
 
     cmds = [
@@ -111,17 +180,14 @@ def ensure_pipx() -> list:
     ]
     installed = False
     for cmd in cmds:
-        success, out = run(*cmd)
+        success, _ = run(*cmd)
         if success:
             installed = True
             break
 
     if not installed:
         err("Não foi possível instalar pipx automaticamente.")
-        if IS_WIN:
-            print(c("    → Rode: python -m pip install pipx", C.CYAN))
-        else:
-            print(c("    → Rode: pip install pipx", C.CYAN))
+        print(c("    → Rode manualmente: pip install pipx", C.CYAN))
         sys.exit(1)
 
     run(sys.executable, "-m", "pipx", "ensurepath")
@@ -160,8 +226,9 @@ def ensure_nodejs():
     else:
         for pkg_mgr, cmd in [
             ("apt-get", ["sudo", "apt-get", "install", "-y", "-qq", "nodejs"]),
-            ("dnf",     ["sudo", "dnf",     "install", "-y", "nodejs"]),
             ("pacman",  ["sudo", "pacman",  "-S", "--noconfirm", "nodejs"]),
+            ("dnf5",    ["sudo", "dnf5",    "install", "-y", "nodejs"]),
+            ("dnf",     ["sudo", "dnf",     "install", "-y", "nodejs"]),
         ]:
             if shutil.which(pkg_mgr):
                 info(f"Instalando Node.js via {pkg_mgr}...")
@@ -171,13 +238,12 @@ def ensure_nodejs():
                     return
                 break
         err("Não foi possível instalar Node.js.")
-        print(c("    → Rode: sudo apt install nodejs", C.CYAN))
+        print(c("    → Instale manualmente dependendo da sua distro.", C.CYAN))
 
 def ensure_ffmpeg():
     """Instala ffmpeg e ffprobe se não estiverem disponíveis."""
     step("Verificando ffmpeg/ffprobe...")
 
-    # Teste de fogo: executa os dois para ter certeza que não são arquivos de 0 KB
     if tool_is_working("ffmpeg") and tool_is_working("ffprobe"):
         ok("ffmpeg e ffprobe encontrados e funcionando")
         return
@@ -186,7 +252,6 @@ def ensure_ffmpeg():
 
     if IS_WIN:
         if shutil.which("winget"):
-            # Tenta winget primeiro
             success, _ = run("winget", "install", "ffmpeg",
                              "--accept-package-agreements",
                              "--accept-source-agreements", "--silent")
@@ -197,7 +262,7 @@ def ensure_ffmpeg():
         info("Tentando baixar versão estática (GitHub)...")
         ffmpeg_dir = Path.home() / ".spotidown" / "ffmpeg"
         
-        # AUTO-LIMPEZA: Se a pasta existir, apaga tudo antes de baixar para evitar conflitos
+        # AUTO-LIMPEZA
         if ffmpeg_dir.exists():
             shutil.rmtree(ffmpeg_dir, ignore_errors=True)
         ffmpeg_dir.mkdir(parents=True, exist_ok=True)
@@ -217,7 +282,6 @@ def ensure_ffmpeg():
                     content = resp.read()
                 print(c(" OK", C.GREEN))
                 
-                # Extraindo o ffmpeg E o ffprobe, com validação de tamanho
                 with zipfile.ZipFile(io.BytesIO(content)) as z:
                     extracted = 0
                     for name in z.namelist():
@@ -226,23 +290,14 @@ def ensure_ffmpeg():
                             dest_file = ffmpeg_dir / file_name
                             dest_file.write_bytes(z.read(name))
                             
-                            # Validação de arquivo corrompido (se tiver < 1KB, deu erro)
                             if dest_file.stat().st_size < 1000:
-                                raise Exception(f"O arquivo {file_name} foi extraído corrompido.")
-                                
+                                raise Exception(f"Arquivo {file_name} extraído corrompido.")
                             extracted += 1
                         if extracted == 2:
                             break
 
-                # Força no PATH do Windows
-                current = os.environ.get("PATH", "")
-                ffmpeg_str = str(ffmpeg_dir)
-                if ffmpeg_str not in current:
-                    subprocess.run(
-                        ["setx", "PATH", f"{current};{ffmpeg_str}"],
-                        capture_output=True
-                    )
-                ok(f"ffmpeg e ffprobe extraídos para {ffmpeg_dir}")
+                add_to_windows_path(str(ffmpeg_dir))
+                ok(f"ffmpeg e ffprobe extraídos em {ffmpeg_dir}")
                 info("Reinicie o terminal para o PATH ser atualizado.")
                 return
         except Exception as e:
@@ -262,8 +317,9 @@ def ensure_ffmpeg():
     else:
         for pkg_mgr, cmd in [
             ("apt-get", ["sudo", "apt-get", "install", "-y", "-qq", "ffmpeg"]),
-            ("dnf",     ["sudo", "dnf",     "install", "-y", "ffmpeg"]),
             ("pacman",  ["sudo", "pacman",  "-S", "--noconfirm", "ffmpeg"]),
+            ("dnf5",    ["sudo", "dnf5",    "install", "-y", "ffmpeg"]),
+            ("dnf",     ["sudo", "dnf",     "install", "-y", "ffmpeg"]),
         ]:
             if shutil.which(pkg_mgr):
                 info(f"Instalando ffmpeg via {pkg_mgr}...")
@@ -273,7 +329,7 @@ def ensure_ffmpeg():
                     return
                 break
         err("Não foi possível instalar ffmpeg.")
-        print(c("    → Rode: sudo apt install ffmpeg", C.CYAN))
+        print(c("    → Instale o pacote 'ffmpeg' manualmente.", C.CYAN))
 
 def install_spotidown(pipx_cmd: list):
     """Instala ou atualiza o spotidown via pipx."""
@@ -303,12 +359,7 @@ def ensure_path(pipx_cmd: list):
         apps_bin = Path.home() / "AppData" / "Local" / "Programs" / "Python" / "Scripts"
         for d in [pipx_bin, apps_bin]:
             if d.exists():
-                current = os.environ.get("PATH", "")
-                if str(d) not in current:
-                    subprocess.run(
-                        ["setx", "PATH", f"{current};{d}"],
-                        capture_output=True
-                    )
+                add_to_windows_path(str(d))
     ok("PATH configurado")
 
 def print_success():
@@ -327,54 +378,6 @@ def print_success():
         print(c("  ⚠  Rode: source ~/.bashrc  (ou abra novo terminal)", C.YELLOW))
     print()
 
-def ensure_linux_base():
-    """Garante pacotes base (git, pip, venv) detectando a distro do usuário."""
-    if not IS_LIN:
-        return
-
-    step("Verificando pacotes base do Linux...")
-    
-    # 1. Testa se o sistema já tem o que precisamos
-    needs_git = not shutil.which("git")
-    success_venv, _ = run(sys.executable, "-c", "import venv")
-    success_pip, _ = run(sys.executable, "-m", "pip", "--version")
-    
-    if not needs_git and success_venv and success_pip:
-        ok("Pacotes base do Linux OK")
-        return
-
-    info("Faltam dependências. Detectando gerenciador de pacotes...")
-
-    # Mapeamento: (Comando, Lista de argumentos para instalar, Pacotes daquela distro)
-    managers = [
-        ("apt-get", ["sudo", "apt-get", "install", "-y", "-qq"], ["git", "python3-venv", "python3-pip"]),
-        ("pacman",  ["sudo", "pacman", "-S", "--noconfirm"],     ["git", "python-pip"]), # Arch tem venv nativo
-        ("dnf",     ["sudo", "dnf", "install", "-y", "-q"],      ["git", "python3-pip"]),
-        ("zypper",  ["sudo", "zypper", "install", "-y", "-q"],   ["git", "python3-pip"]),
-        ("apk",     ["sudo", "apk", "add", "-q"],                ["git", "py3-pip"])
-    ]
-
-    for pkg_mgr, cmd_base, pkgs in managers:
-        if shutil.which(pkg_mgr):
-            info(f"Instalando via {pkg_mgr} (pode pedir senha sudo)...")
-            
-            # Se for apt, roda o update primeiro para evitar erros de repositório velho
-            if pkg_mgr == "apt-get":
-                run("sudo", "apt-get", "update", "-qq")
-                
-            success, out = run(*(cmd_base + pkgs))
-            if success:
-                ok(f"Pacotes base instalados via {pkg_mgr}!")
-                return
-            else:
-                err(f"Falha ao instalar via {pkg_mgr}.")
-                print(c(f"    Saída: {out[:300]}", C.DIM))
-                sys.exit(1)
-                
-    err("Gerenciador de pacotes não reconhecido.")
-    print(c("    → Por favor, instale 'git' e o 'pip' do Python manualmente.", C.CYAN))
-    sys.exit(1)
-    
 def main():
     enable_ansi()
     print(c("\n  ♫ SpotiDown — Instalador Universal", C.GREEN, C.BOLD))
