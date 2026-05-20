@@ -13,6 +13,10 @@ import sys
 import shutil
 import subprocess
 import platform
+import urllib.request
+import zipfile
+import io
+import json
 from pathlib import Path
 
 IS_WIN = sys.platform == "win32"
@@ -57,6 +61,16 @@ def run(*args, **kwargs):
     except Exception as e:
         return False, str(e)
 
+def tool_is_working(cmd, test_flag="-version"):
+    """
+    Verifica se o programa existe no PATH e se ele executa corretamente.
+    Evita falsos positivos com arquivos corrompidos de 0 KB.
+    """
+    if not shutil.which(cmd):
+        return False
+    success, _ = run(cmd, test_flag)
+    return success
+
 # ── Verificações ──────────────────────────────────────────────────────────────
 def check_python_version():
     step("Verificando Python...")
@@ -76,13 +90,10 @@ def ensure_pip():
         run(sys.executable, "-m", "ensurepip", "--upgrade")
 
 def ensure_pipx() -> list:
-    """
-    Retorna o comando pipx como lista.
-    Instala se necessário. No Windows usa 'python -m pipx' se pipx não estiver no PATH.
-    """
+    """Retorna o comando pipx como lista. Instala se necessário."""
     step("Verificando pipx...")
 
-    if shutil.which("pipx"):
+    if tool_is_working("pipx", "--version"):
         ok("pipx encontrado no PATH")
         return ["pipx"]
 
@@ -121,18 +132,18 @@ def ensure_nodejs():
     """Garante que o Node.js está instalado para o yt-dlp não falhar no YouTube."""
     step("Verificando Node.js (JavaScript runtime)...")
 
-    if shutil.which("node"):
-        ok("Node.js encontrado")
+    if tool_is_working("node", "-v") or tool_is_working("node", "--version"):
+        ok("Node.js encontrado e funcionando")
         return
 
-    info("Node.js não encontrado. Instalando...")
+    info("Node.js não encontrado ou corrompido. Instalando...")
 
     if IS_WIN:
         if shutil.which("winget"):
             success, _ = run("winget", "install", "OpenJS.NodeJS",
                              "--accept-package-agreements",
                              "--accept-source-agreements", "--silent")
-            if success and shutil.which("node"):
+            if success and tool_is_working("node", "-v"):
                 ok("Node.js instalado via winget")
                 return
         err("Não foi possível instalar Node.js automaticamente.")
@@ -166,52 +177,64 @@ def ensure_ffmpeg():
     """Instala ffmpeg e ffprobe se não estiverem disponíveis."""
     step("Verificando ffmpeg/ffprobe...")
 
-    if shutil.which("ffmpeg") and shutil.which("ffprobe"):
-        ok("ffmpeg e ffprobe encontrados")
+    # Teste de fogo: executa os dois para ter certeza que não são arquivos de 0 KB
+    if tool_is_working("ffmpeg") and tool_is_working("ffprobe"):
+        ok("ffmpeg e ffprobe encontrados e funcionando")
         return
 
-    info("ffmpeg ou ffprobe não encontrados. Instalando...")
+    info("ffmpeg ou ffprobe ausentes/corrompidos. Instalando...")
 
     if IS_WIN:
         if shutil.which("winget"):
+            # Tenta winget primeiro
             success, _ = run("winget", "install", "ffmpeg",
                              "--accept-package-agreements",
                              "--accept-source-agreements", "--silent")
-            if success and shutil.which("ffmpeg"):
+            if success and tool_is_working("ffmpeg") and tool_is_working("ffprobe"):
                 ok("ffmpeg/ffprobe instalados via winget")
                 return
 
-        info("Tentando baixar ffmpeg via yt-dlp estático...")
+        info("Tentando baixar versão estática (GitHub)...")
         ffmpeg_dir = Path.home() / ".spotidown" / "ffmpeg"
+        
+        # AUTO-LIMPEZA: Se a pasta existir, apaga tudo antes de baixar para evitar conflitos
+        if ffmpeg_dir.exists():
+            shutil.rmtree(ffmpeg_dir, ignore_errors=True)
         ffmpeg_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            import urllib.request, zipfile, io, json as _json
             api = "https://api.github.com/repos/yt-dlp/FFmpeg-Builds/releases/latest"
             req = urllib.request.Request(api, headers={"User-Agent": "spotidown-installer"})
-            data = _json.loads(urllib.request.urlopen(req, timeout=15).read())
+            data = json.loads(urllib.request.urlopen(req, timeout=15).read())
             asset_url = next(
                 (a["browser_download_url"] for a in data.get("assets", [])
                  if "win64" in a["name"] and a["name"].endswith(".zip")),
                 None
             )
             if asset_url:
-                print(c("    Baixando ffmpeg estático (pode demorar)...", C.DIM), end="", flush=True)
+                print(c("    Baixando pacote ZIP (pode demorar)...", C.DIM), end="", flush=True)
                 with urllib.request.urlopen(asset_url, timeout=120) as resp:
                     content = resp.read()
                 print(c(" OK", C.GREEN))
                 
-                # MUDANÇA AQUI: Extraindo ffmpeg E ffprobe
+                # Extraindo o ffmpeg E o ffprobe, com validação de tamanho
                 with zipfile.ZipFile(io.BytesIO(content)) as z:
                     extracted = 0
                     for name in z.namelist():
                         if name.endswith("ffmpeg.exe") or name.endswith("ffprobe.exe"):
                             file_name = os.path.basename(name)
-                            (ffmpeg_dir / file_name).write_bytes(z.read(name))
+                            dest_file = ffmpeg_dir / file_name
+                            dest_file.write_bytes(z.read(name))
+                            
+                            # Validação de arquivo corrompido (se tiver < 1KB, deu erro)
+                            if dest_file.stat().st_size < 1000:
+                                raise Exception(f"O arquivo {file_name} foi extraído corrompido.")
+                                
                             extracted += 1
                         if extracted == 2:
                             break
 
+                # Força no PATH do Windows
                 current = os.environ.get("PATH", "")
                 ffmpeg_str = str(ffmpeg_dir)
                 if ffmpeg_str not in current:
@@ -219,7 +242,7 @@ def ensure_ffmpeg():
                         ["setx", "PATH", f"{current};{ffmpeg_str}"],
                         capture_output=True
                     )
-                ok(f"ffmpeg e ffprobe instalados em {ffmpeg_dir}")
+                ok(f"ffmpeg e ffprobe extraídos para {ffmpeg_dir}")
                 info("Reinicie o terminal para o PATH ser atualizado.")
                 return
         except Exception as e:
@@ -313,7 +336,7 @@ def main():
     check_python_version()
     ensure_pip()
     pipx_cmd = ensure_pipx()
-    ensure_nodejs()  # <--- NOVA ETAPA DE VERIFICAÇÃO ADICIONADA AQUI
+    ensure_nodejs()
     ensure_ffmpeg()
     install_spotidown(pipx_cmd)
     ensure_path(pipx_cmd)
