@@ -82,18 +82,15 @@ def ensure_pipx() -> list:
     """
     step("Verificando pipx...")
 
-    # Tenta pipx direto no PATH
     if shutil.which("pipx"):
         ok("pipx encontrado no PATH")
         return ["pipx"]
 
-    # Tenta python -m pipx
     success, _ = run(sys.executable, "-m", "pipx", "--version")
     if success:
         ok("pipx disponível via python -m pipx")
         return [sys.executable, "-m", "pipx"]
 
-    # Instala pipx
     info("pipx não encontrado. Instalando...")
     ensure_pip()
 
@@ -116,34 +113,75 @@ def ensure_pipx() -> list:
             print(c("    → Rode: pip install pipx", C.CYAN))
         sys.exit(1)
 
-    # Adiciona ao PATH se necessário
     run(sys.executable, "-m", "pipx", "ensurepath")
-
     ok("pipx instalado")
     return [sys.executable, "-m", "pipx"]
 
-def ensure_ffmpeg():
-    """Instala ffmpeg se não estiver disponível."""
-    step("Verificando ffmpeg...")
+def ensure_nodejs():
+    """Garante que o Node.js está instalado para o yt-dlp não falhar no YouTube."""
+    step("Verificando Node.js (JavaScript runtime)...")
 
-    if shutil.which("ffmpeg"):
-        ok("ffmpeg encontrado")
+    if shutil.which("node"):
+        ok("Node.js encontrado")
         return
 
-    info("ffmpeg não encontrado. Instalando...")
+    info("Node.js não encontrado. Instalando...")
 
     if IS_WIN:
-        # winget (Windows 10+)
+        if shutil.which("winget"):
+            success, _ = run("winget", "install", "OpenJS.NodeJS",
+                             "--accept-package-agreements",
+                             "--accept-source-agreements", "--silent")
+            if success and shutil.which("node"):
+                ok("Node.js instalado via winget")
+                return
+        err("Não foi possível instalar Node.js automaticamente.")
+        print(c("    → Instale baixando em: https://nodejs.org", C.CYAN))
+
+    elif IS_MAC:
+        if shutil.which("brew"):
+            success, _ = run("brew", "install", "node")
+            if success:
+                ok("Node.js instalado via brew")
+                return
+        err("Instale com: brew install node")
+
+    else:
+        for pkg_mgr, cmd in [
+            ("apt-get", ["sudo", "apt-get", "install", "-y", "-qq", "nodejs"]),
+            ("dnf",     ["sudo", "dnf",     "install", "-y", "nodejs"]),
+            ("pacman",  ["sudo", "pacman",  "-S", "--noconfirm", "nodejs"]),
+        ]:
+            if shutil.which(pkg_mgr):
+                info(f"Instalando Node.js via {pkg_mgr}...")
+                success, _ = run(*cmd)
+                if success:
+                    ok("Node.js instalado")
+                    return
+                break
+        err("Não foi possível instalar Node.js.")
+        print(c("    → Rode: sudo apt install nodejs", C.CYAN))
+
+def ensure_ffmpeg():
+    """Instala ffmpeg e ffprobe se não estiverem disponíveis."""
+    step("Verificando ffmpeg/ffprobe...")
+
+    if shutil.which("ffmpeg") and shutil.which("ffprobe"):
+        ok("ffmpeg e ffprobe encontrados")
+        return
+
+    info("ffmpeg ou ffprobe não encontrados. Instalando...")
+
+    if IS_WIN:
         if shutil.which("winget"):
             success, _ = run("winget", "install", "ffmpeg",
                              "--accept-package-agreements",
                              "--accept-source-agreements", "--silent")
             if success and shutil.which("ffmpeg"):
-                ok("ffmpeg instalado via winget")
+                ok("ffmpeg/ffprobe instalados via winget")
                 return
 
-        # Fallback: yt-dlp baixa o ffmpeg estático
-        info("Tentando baixar ffmpeg via yt-dlp...")
+        info("Tentando baixar ffmpeg via yt-dlp estático...")
         ffmpeg_dir = Path.home() / ".spotidown" / "ffmpeg"
         ffmpeg_dir.mkdir(parents=True, exist_ok=True)
 
@@ -162,13 +200,18 @@ def ensure_ffmpeg():
                 with urllib.request.urlopen(asset_url, timeout=120) as resp:
                     content = resp.read()
                 print(c(" OK", C.GREEN))
+                
+                # MUDANÇA AQUI: Extraindo ffmpeg E ffprobe
                 with zipfile.ZipFile(io.BytesIO(content)) as z:
+                    extracted = 0
                     for name in z.namelist():
-                        if name.endswith("ffmpeg.exe"):
-                            (ffmpeg_dir / "ffmpeg.exe").write_bytes(z.read(name))
+                        if name.endswith("ffmpeg.exe") or name.endswith("ffprobe.exe"):
+                            file_name = os.path.basename(name)
+                            (ffmpeg_dir / file_name).write_bytes(z.read(name))
+                            extracted += 1
+                        if extracted == 2:
                             break
 
-                # Adiciona ao PATH do usuário permanentemente
                 current = os.environ.get("PATH", "")
                 ffmpeg_str = str(ffmpeg_dir)
                 if ffmpeg_str not in current:
@@ -176,7 +219,7 @@ def ensure_ffmpeg():
                         ["setx", "PATH", f"{current};{ffmpeg_str}"],
                         capture_output=True
                     )
-                ok(f"ffmpeg instalado em {ffmpeg_dir}")
+                ok(f"ffmpeg e ffprobe instalados em {ffmpeg_dir}")
                 info("Reinicie o terminal para o PATH ser atualizado.")
                 return
         except Exception as e:
@@ -184,7 +227,6 @@ def ensure_ffmpeg():
 
         err("Não foi possível instalar ffmpeg automaticamente.")
         print(c("    → Instale manualmente: winget install ffmpeg", C.CYAN))
-        print(c("    → Ou baixe em: https://ffmpeg.org/download.html", C.CYAN))
 
     elif IS_MAC:
         if shutil.which("brew"):
@@ -193,9 +235,8 @@ def ensure_ffmpeg():
                 ok("ffmpeg instalado via brew")
                 return
         err("Instale com: brew install ffmpeg")
-        print(c("    → Se não tiver brew: https://brew.sh", C.CYAN))
 
-    else:  # Linux
+    else:
         for pkg_mgr, cmd in [
             ("apt-get", ["sudo", "apt-get", "install", "-y", "-qq", "ffmpeg"]),
             ("dnf",     ["sudo", "dnf",     "install", "-y", "ffmpeg"]),
@@ -215,13 +256,11 @@ def install_spotidown(pipx_cmd: list):
     """Instala ou atualiza o spotidown via pipx."""
     step("Instalando SpotiDown...")
 
-    # Tenta atualizar primeiro (se já instalado)
     success, out = run(*pipx_cmd, "upgrade", "spotidown")
     if success:
         ok("SpotiDown atualizado!")
         return
 
-    # Instala do zero
     success, out = run(*pipx_cmd, "install", REPO)
     if success:
         ok("SpotiDown instalado!")
@@ -237,7 +276,6 @@ def ensure_path(pipx_cmd: list):
     run(*pipx_cmd, "ensurepath")
 
     if IS_WIN:
-        # No Windows o ensurepath modifica o registro mas não o terminal atual
         pipx_bin = Path.home() / ".local" / "bin"
         apps_bin = Path.home() / "AppData" / "Local" / "Programs" / "Python" / "Scripts"
         for d in [pipx_bin, apps_bin]:
@@ -275,6 +313,7 @@ def main():
     check_python_version()
     ensure_pip()
     pipx_cmd = ensure_pipx()
+    ensure_nodejs()  # <--- NOVA ETAPA DE VERIFICAÇÃO ADICIONADA AQUI
     ensure_ffmpeg()
     install_spotidown(pipx_cmd)
     ensure_path(pipx_cmd)
