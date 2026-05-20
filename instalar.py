@@ -327,6 +327,49 @@ def print_success():
         print(c("  ⚠  Rode: source ~/.bashrc  (ou abra novo terminal)", C.YELLOW))
     print()
 
+def ensure_linux_base():
+    """Garante que pacotes vitais do sistema (git, pip, venv) existam no Linux."""
+    if not IS_LIN:
+        return
+
+    step("Verificando pacotes base do Linux...")
+    deps_to_install = []
+
+    # 1. Verifica o Git
+    if not shutil.which("git"):
+        deps_to_install.append("git")
+
+    # 2. Verifica o venv
+    success, _ = run(sys.executable, "-c", "import venv")
+    if not success:
+        deps_to_install.append("python3-venv")
+
+    # 3. Verifica o pip do sistema
+    success, _ = run(sys.executable, "-m", "pip", "--version")
+    if not success:
+        deps_to_install.append("python3-pip")
+
+    if deps_to_install:
+        info(f"Faltam pacotes do sistema: {', '.join(deps_to_install)}")
+        
+        # Tenta instalar via apt (Debian/Ubuntu)
+        if shutil.which("apt-get"):
+            info("Instalando via apt-get (pode pedir senha sudo)...")
+            run("sudo", "apt-get", "update", "-qq")
+            success, _ = run("sudo", "apt-get", "install", "-y", "-qq", *deps_to_install)
+            if success:
+                ok("Pacotes base instalados com sucesso!")
+            else:
+                err("Falha ao instalar pacotes base.")
+                print(c(f"    → Rode manualmente: sudo apt install {' '.join(deps_to_install)}", C.CYAN))
+                sys.exit(1)
+        else:
+            err("Gerenciador de pacotes não suportado. Instale manualmente:")
+            print(c(f"    → {', '.join(deps_to_install)}", C.CYAN))
+            sys.exit(1)
+    else:
+        ok("Pacotes base do Linux OK")
+
 def main():
     enable_ansi()
     print(c("\n  ♫ SpotiDown — Instalador Universal", C.GREEN, C.BOLD))
@@ -334,6 +377,7 @@ def main():
     print(c("  " + "─" * 38, C.DIM))
 
     check_python_version()
+    ensure_linux_base()
     ensure_pip()
     pipx_cmd = ensure_pipx()
     ensure_nodejs()
