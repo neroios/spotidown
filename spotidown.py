@@ -446,13 +446,18 @@ def download_track(query, out_dir, index):
         "--add-metadata",
         "--ffmpeg-location", FFMPEG_PATH,
         "--output", out_template,
-        "--quiet",
-        "--no-warnings",
+       # "--quiet",
+       # "--no-warnings",
         "ytsearch1:" + query, # <-- Voltamos para o YT normal!
     ]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=180)
+        # Tirar Depois
+        if r.returncode != 0:
+            print(f"\n[ERRO YT-DLP] {r.stderr}")
+
+        
         return r.returncode == 0
     except Exception:
         return False
