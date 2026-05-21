@@ -22,9 +22,16 @@ import tempfile
 import argparse
 import unicodedata
 import subprocess
+import ssl
 from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.parse import quote, urlencode
+
+# Ignora erros de SSL (muito comum em VMs e redes corporativas)
+try:
+    SSL_CTX = ssl._create_unverified_context()
+except AttributeError:
+    SSL_CTX = None
 
 # ── Plataforma ────────────────────────────────────────────────────────────────
 IS_WIN = sys.platform == "win32"
@@ -83,7 +90,7 @@ def truncate(s, n=48):
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 def http_get(url, timeout=20):
     req = Request(url, headers={"User-Agent": "Mozilla/5.0 spotidown/5.0"})
-    with urlopen(req, timeout=timeout) as r:
+    with urlopen(req, timeout=timeout, context=SSL_CTX) as r:
         return r.read()
 
 # ── Dependencias ──────────────────────────────────────────────────────────────
@@ -140,13 +147,13 @@ def install_ffmpeg_windows():
         ffmpeg_dir.mkdir(parents=True, exist_ok=True)
         api  = "https://api.github.com/repos/yt-dlp/FFmpeg-Builds/releases/latest"
         data = json.loads(urlopen(
-            Request(api, headers={"User-Agent": "spotidown"}), timeout=15).read())
+            Request(api, headers={"User-Agent": "spotidown"}), timeout=15, context=SSL_CTX).read())
         url  = next(
             (a["browser_download_url"] for a in data.get("assets", [])
              if "win64" in a["name"] and a["name"].endswith(".zip")), None)
         if not url:
             return False
-        with urlopen(url, timeout=180) as resp:
+        with urlopen(url, timeout=180, context=SSL_CTX) as resp:
             content = resp.read()
         import zipfile as zf
         with zf.ZipFile(io.BytesIO(content)) as z:
@@ -309,7 +316,7 @@ def fetch_musicbrainz(artist, album):
 # ── Metadados: yt-dlp flat ────────────────────────────────────────────────────
 def fetch_ytdlp_flat(url):
     cmd = YTDLP_CMD + ["--flat-playlist", "--dump-single-json",
-                       "--no-warnings", "--quiet", url]
+                       "--no-warnings", "--quiet", "--no-check-certificates", url]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=60)
@@ -448,6 +455,7 @@ def download_track(query, out_dir, index):
         "--output", out_template,
        # "--quiet",
        # "--no-warnings",
+        "--no-check-certificates",
         "ytsearch1:" + query, # <-- Voltamos para o YT normal!
     ]
     try:
@@ -472,7 +480,7 @@ def download_all(tracks, out_dir):
               end="", flush=True)
         if not download_track(track["query"], out_dir, i):
             fails += 1
-    print("\r  " + progress_bar(total, total) + "                              ", flush=True)
+    print("\r  " + progress_bar(total, total) + "                                ", flush=True)
     print()
     if fails:
         print(c("  ~ " + str(fails) + " faixa(s) nao encontradas no YouTube", C.YELLOW))
