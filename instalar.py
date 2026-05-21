@@ -335,7 +335,17 @@ def ensure_ffmpeg():
                 return
             err("ffmpeg baixado mas não executa corretamente.")
         else:
-            err("Não foi possível baixar ffmpeg automaticamente.")
+            info("Download direto falhou. Tentando via winget em última instância...")
+            
+            if shutil.which("winget"):
+                s, _ = run("winget", "install", "ffmpeg",
+                           "--accept-package-agreements",
+                           "--accept-source-agreements", "--silent", timeout=300)
+                if s and _ffmpeg_ok():
+                    ok("ffmpeg/ffprobe instalados via winget!")
+                    return
+                    
+        err("Não foi possível instalar ffmpeg automaticamente.")
         print(c("    → Instale manualmente: winget install ffmpeg", C.CYAN))
         print(c("    → Ou baixe em: https://ffmpeg.org/download.html", C.CYAN))
 
