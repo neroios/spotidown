@@ -216,20 +216,21 @@ def ensure_pipx() -> list:
 
 # ── ffmpeg ────────────────────────────────────────────────────────────────────
 def _ffmpeg_ok():
-    """Verifica ffmpeg E ffprobe com tamanho mínimo."""
-    for name in (["ffmpeg", "-version"], ["ffprobe", "-version"]):
-        path = shutil.which(name[0])
+    """Verifica ffmpeg E ffprobe. No Windows valida tamanho mínimo (evita arquivos corrompidos)."""
+    for binary, flag in [("ffmpeg", "-version"), ("ffprobe", "-version")]:
+        path = shutil.which(binary)
         if not path:
             # Tenta na pasta portátil diretamente
             ext  = ".exe" if IS_WIN else ""
-            path = str(FFMPEG_DIR / (name[0] + ext))
-            if not Path(path).exists():
+            p    = FFMPEG_DIR / (binary + ext)
+            if not p.exists():
                 return False
+            path = str(p)
         try:
-            # Verifica tamanho — arquivo corrompido/parcial rejeita aqui
-            if Path(path).stat().st_size < MIN_BINARY_SIZE:
+            # No Windows: checa tamanho mínimo para rejeitar downloads corrompidos
+            if IS_WIN and Path(path).stat().st_size < MIN_BINARY_SIZE:
                 return False
-            r = subprocess.run([path, name[1]], capture_output=True, timeout=10)
+            r = subprocess.run([path, flag], capture_output=True, timeout=10)
             if r.returncode != 0:
                 return False
         except Exception:
@@ -330,13 +331,37 @@ def ensure_ffmpeg():
     info("ffmpeg não encontrado ou corrompido. Instalando...")
 
     if IS_WIN:
+        # 1. winget — mais rápido e confiável em qualquer rede corporativa/VM
+        if shutil.which("winget"):
+            info("Tentando instalar via winget...")
+            s, out = run("winget", "install", "--id", "Gyan.FFmpeg", "-e",
+                         "--accept-package-agreements",
+                         "--accept-source-agreements", "--silent", timeout=300)
+            # winget instala em várias pastas; tenta encontrar o binário
+            winget_paths = [
+                r"C:\ProgramData\chocolatey\bin",
+                r"C:\ffmpeg\bin",
+                r"C:\Program Files\ffmpeg\bin",
+                r"C:\Program Files (x86)\ffmpeg\bin",
+            ]
+            for wp in winget_paths:
+                if Path(wp).exists() and (Path(wp) / "ffmpeg.exe").exists():
+                    add_to_path(wp)
+                    break
+            if _ffmpeg_ok():
+                ok("ffmpeg instalado via winget")
+                return
+            info("winget não conseguiu instalar. Tentando download direto...")
+
+        # 2. Download direto do GitHub (pode falhar em redes restritas)
         if _download_ffmpeg_windows():
             if _ffmpeg_ok():
                 return
             err("ffmpeg baixado mas não executa corretamente.")
         else:
-            err("Não foi possível baixar ffmpeg automaticamente.")
-        print(c("    → Instale manualmente: winget install ffmpeg", C.CYAN))
+            err("Não foi possível instalar ffmpeg automaticamente.")
+
+        print(c("    → Tente manualmente: winget install Gyan.FFmpeg", C.CYAN))
         print(c("    → Ou baixe em: https://ffmpeg.org/download.html", C.CYAN))
 
     elif IS_MAC:
