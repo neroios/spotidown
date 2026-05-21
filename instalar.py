@@ -206,12 +206,54 @@ def ensure_nodejs():
 
     if IS_WIN:
         if shutil.which("winget"):
-            success, _ = run("winget", "install", "OpenJS.NodeJS",
+            info("Tentando instalar via winget...")
+            # Usando a ID exata da versão LTS para evitar erros
+            success, _ = run("winget", "install", "--id", "OpenJS.NodeJS.LTS", "-e",
                              "--accept-package-agreements",
                              "--accept-source-agreements", "--silent")
+            
+            # O winget instala no Program Files, mas a janela atual não sabe disso.
+            # Vamos forçar a leitura do caminho padrão para o teste de fogo passar.
+            std_path = r"C:\Program Files\nodejs"
+            if os.path.exists(std_path) and std_path not in os.environ.get("PATH", ""):
+                os.environ["PATH"] += f";{std_path}"
+
             if success and tool_is_working("node", "-v"):
                 ok("Node.js instalado via winget")
                 return
+
+        # FALLBACK: Se o winget falhar (muito comum em VMs), baixa a versão portátil
+        info("winget falhou. Tentando baixar Node.js portátil (ZIP)...")
+        node_dir = Path.home() / ".spotidown" / "nodejs"
+        
+        if node_dir.exists():
+            shutil.rmtree(node_dir, ignore_errors=True)
+        node_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Baixando uma versão LTS estável diretamente
+            node_version = "v20.12.2"
+            node_url = f"https://nodejs.org/dist/{node_version}/node-{node_version}-win-x64.zip"
+            
+            print(c("    Baixando pacote ZIP (pode demorar)...", C.DIM), end="", flush=True)
+            with urllib.request.urlopen(node_url, timeout=120) as resp:
+                content = resp.read()
+            print(c(" OK", C.GREEN))
+            
+            with zipfile.ZipFile(io.BytesIO(content)) as z:
+                z.extractall(node_dir)
+
+            # A pasta real fica um nível para dentro do ZIP extraído
+            extracted_bin = node_dir / f"node-{node_version}-win-x64"
+            add_to_windows_path(str(extracted_bin))
+            
+            if tool_is_working("node", "-v"):
+                ok(f"Node.js extraído com sucesso em {extracted_bin}")
+                info("Reinicie o terminal para o PATH ser atualizado.")
+                return
+        except Exception as e:
+            info(f"Download automático falhou: {e}")
+
         err("Não foi possível instalar Node.js automaticamente.")
         print(c("    → Instale baixando em: https://nodejs.org", C.CYAN))
 
