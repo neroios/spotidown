@@ -4,12 +4,10 @@ spotidown - Baixa playlists/albuns/musicas do Spotify em MP3 via YouTube.
 Nao precisa de conta Premium, API key ou autenticacao.
 
 Uso:
-    python3 spotidown.py "LINK_SPOTIFY" "PASTA_DESTINO"
-    python3 spotidown.py "LINK_SPOTIFY"
-    python3 spotidown.py "artista album ou musica" "PASTA_DESTINO"
-    python3 spotidown.py "metallica ride the lightning"
-
-Requer apenas Python 3.10+ instalado. O resto e instalado automaticamente.
+    spotidown "LINK_SPOTIFY"
+    spotidown "LINK_SPOTIFY" "PASTA_DESTINO"
+    spotidown "artista album ou musica"
+    spotidown "metallica ride the lightning"
 """
 
 import re
@@ -27,29 +25,20 @@ from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.parse import quote, urlencode
 
-# Ignora erros de SSL (muito comum em VMs e redes corporativas)
 try:
     SSL_CTX = ssl._create_unverified_context()
 except AttributeError:
     SSL_CTX = None
 
-# ── Plataforma ────────────────────────────────────────────────────────────────
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
 
-FFMPEG_WIN_PATHS = [
-    str(Path.home() / ".spotidown" / "ffmpeg" / "ffmpeg.exe"),
-    r"C:\Users\Admin\Downloads\LosslessCut-win-x64\resources\ffmpeg.exe",
-    r"C:\ffmpeg\bin\ffmpeg.exe",
-    r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
-    r"C:\ProgramData\chocolatey\bin\ffmpeg.exe",
-]
+SPOTIDOWN_DIR = Path.home() / ".spotidown"
 
-# Globals preenchidos em check_dependencies()
 FFMPEG_PATH = None
 YTDLP_CMD   = None
 
-# ── Cores ANSI ───────────────────────────────────────────────────────────────
+# ── Cores ANSI ────────────────────────────────────────────────────────────────
 class C:
     GREEN  = "\033[92m"
     YELLOW = "\033[93m"
@@ -93,40 +82,105 @@ def http_get(url, timeout=20):
     with urlopen(req, timeout=timeout, context=SSL_CTX) as r:
         return r.read()
 
-# ── Dependencias ──────────────────────────────────────────────────────────────
-def find_ffmpeg():
-    found_ffmpeg = shutil.which("ffmpeg")
-    found_ffprobe = shutil.which("ffprobe")
-    
-    # Se os dois existem no PATH global, sucesso
-    if found_ffmpeg and found_ffprobe:
-        return found_ffmpeg
-        
-    # Se nao, busca nas pastas de fallback locais no Windows
-    if IS_WIN:
-        for p in FFMPEG_WIN_PATHS:
-            p_path = Path(p)
-            if p_path.exists():
-                # Confirma se o ffprobe tambem esta junto na pasta
-                ffprobe_path = p_path.parent / "ffprobe.exe"
-                if ffprobe_path.exists():
-                    return p
-    return None
-
+# ── Localizar yt-dlp de forma robusta ────────────────────────────────────────
 def find_ytdlp():
-    if shutil.which("yt-dlp"):
-        return ["yt-dlp"]
+    """
+    Procura o yt-dlp em todas as localizações possíveis:
+    1. No PATH do sistema
+    2. No venv do pipx onde o spotidown foi instalado (caso mais comum no Windows)
+    3. Nos venvs do pipx do usuário
+    4. Via python -m yt_dlp (qualquer python no PATH)
+    """
+
+    # 1. No PATH diretamente
+    found = shutil.which("yt-dlp")
+    if found and _ytdlp_works([found]):
+        return [found]
+
+    # 2. No mesmo venv do spotidown (pipx instala tudo junto)
+    #    __file__ aponta para dentro do venv: .../pipx/venvs/spotidown/Lib/site-packages/...
     try:
-        r = subprocess.run([sys.executable, "-m", "yt_dlp", "--version"],
-                           capture_output=True, timeout=10)
-        if r.returncode == 0:
-            return [sys.executable, "-m", "yt_dlp"]
+        venv_scripts = Path(sys.executable).parent
+        candidates = [
+            venv_scripts / "yt-dlp.exe",
+            venv_scripts / "yt-dlp",
+        ]
+        for p in candidates:
+            if p.exists() and _ytdlp_works([str(p)]):
+                return [str(p)]
     except Exception:
         pass
+
+    # 3. Venvs do pipx: procura em ~/.local/pipx/venvs e ~/pipx/venvs
+    pipx_roots = [
+        Path.home() / ".local" / "pipx" / "venvs",
+        Path.home() / "pipx" / "venvs",
+        Path.home() / "AppData" / "Local" / "pipx" / "venvs",
+    ]
+    for root in pipx_roots:
+        if not root.exists():
+            continue
+        for venv in root.iterdir():
+            for rel in ["Scripts/yt-dlp.exe", "Scripts/yt-dlp", "bin/yt-dlp"]:
+                p = venv / rel
+                if p.exists() and _ytdlp_works([str(p)]):
+                    return [str(p)]
+
+    # 4. python -m yt_dlp com qualquer python disponível
+    for py in [sys.executable, "python3", "python"]:
+        cmd = [py, "-m", "yt_dlp"]
+        if _ytdlp_works(cmd):
+            return cmd
+
+    return None
+
+def _ytdlp_works(cmd):
+    try:
+        r = subprocess.run(cmd + ["--version"], capture_output=True, timeout=10)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+# ── Localizar ffmpeg de forma robusta ────────────────────────────────────────
+def find_ffmpeg():
+    # 1. No PATH
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+
+    # 2. Pasta portátil do instalador
+    portable = SPOTIDOWN_DIR / "ffmpeg" / ("ffmpeg.exe" if IS_WIN else "ffmpeg")
+    if portable.exists():
+        return str(portable)
+
+    if IS_WIN:
+        # 3. Locais comuns de instalação no Windows
+        common = [
+            r"C:\ProgramData\chocolatey\bin\ffmpeg.exe",
+            r"C:\ffmpeg\bin\ffmpeg.exe",
+            r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+            r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe",
+            r"C:\Windows\System32\ffmpeg.exe",
+        ]
+        # 4. Busca no winget/programdata
+        for p in common:
+            if Path(p).exists():
+                return p
+
+        # 5. Dentro do venv do pipx (algumas builds incluem ffmpeg)
+        try:
+            venv_scripts = Path(sys.executable).parent
+            p = venv_scripts / "ffmpeg.exe"
+            if p.exists():
+                return str(p)
+        except Exception:
+            pass
+
     return None
 
 def install_ytdlp():
     print(c("  >> Instalando yt-dlp...", C.YELLOW))
+    # Tenta instalar no venv atual (que é o do pipx, quando rodando via spotidown)
     for extra in [[], ["--break-system-packages"]]:
         try:
             r = subprocess.run(
@@ -139,50 +193,56 @@ def install_ytdlp():
     return False
 
 def install_ffmpeg_linux():
-    print(c("  >> Instalando ffmpeg via apt...", C.YELLOW))
-    try:
-        subprocess.run(["sudo", "apt-get", "update", "-qq"], timeout=60, check=True)
-        subprocess.run(["sudo", "apt-get", "install", "-y", "-qq", "ffmpeg"],
-                       timeout=120, check=True)
-        return True
-    except Exception:
-        return False
+    print(c("  >> Instalando ffmpeg...", C.YELLOW))
+    for mgr, cmd in [
+        ("apt-get", ["sudo", "apt-get", "install", "-y", "-qq", "ffmpeg"]),
+        ("pacman",  ["sudo", "pacman", "-S", "--noconfirm", "ffmpeg"]),
+        ("dnf",     ["sudo", "dnf", "install", "-y", "ffmpeg"]),
+    ]:
+        if shutil.which(mgr):
+            try:
+                if mgr == "apt-get":
+                    subprocess.run(["sudo", "apt-get", "update", "-qq"], timeout=60)
+                r = subprocess.run(cmd, timeout=120)
+                if r.returncode == 0:
+                    return True
+            except Exception:
+                pass
+    return False
 
-def install_ffmpeg_windows():
-    print(c("  >> Baixando ffmpeg (GitHub)...", C.YELLOW))
+def install_ffmpeg_windows_portable():
+    """Baixa ffmpeg estático do GitHub como fallback."""
+    import io
+    print(c("  >> Baixando ffmpeg portátil...", C.YELLOW))
+    ffmpeg_dir = SPOTIDOWN_DIR / "ffmpeg"
+    if ffmpeg_dir.exists():
+        shutil.rmtree(ffmpeg_dir, ignore_errors=True)
+    ffmpeg_dir.mkdir(parents=True, exist_ok=True)
     try:
-        import io
-        ffmpeg_dir = Path.home() / ".spotidown" / "ffmpeg"
-        
-        # Limpa restos corrompidos antes de baixar
-        if ffmpeg_dir.exists():
-            shutil.rmtree(ffmpeg_dir, ignore_errors=True)
-        ffmpeg_dir.mkdir(parents=True, exist_ok=True)
-        
-        api  = "https://api.github.com/repos/yt-dlp/FFmpeg-Builds/releases/latest"
-        data = json.loads(urlopen(
-            Request(api, headers={"User-Agent": "spotidown"}), timeout=15, context=SSL_CTX).read())
-        url  = next(
+        api = "https://api.github.com/repos/yt-dlp/FFmpeg-Builds/releases/latest"
+        req = Request(api, headers={"User-Agent": "spotidown"})
+        data = json.loads(urlopen(req, timeout=15, context=SSL_CTX).read())
+        url = next(
             (a["browser_download_url"] for a in data.get("assets", [])
              if "win64" in a["name"] and a["name"].endswith(".zip")), None)
         if not url:
             return False
         with urlopen(url, timeout=180, context=SSL_CTX) as resp:
             content = resp.read()
-        import zipfile as zf
-        with zf.ZipFile(io.BytesIO(content)) as z:
-            extracted = 0
+        extracted = 0
+        with zipfile.ZipFile(io.BytesIO(content)) as z:
             for name in z.namelist():
-                # Extrai apenas os executaveis relevantes
-                if name.endswith("ffmpeg.exe") or name.endswith("ffprobe.exe"):
-                    file_name = os.path.basename(name)
-                    (ffmpeg_dir / file_name).write_bytes(z.read(name))
+                base = os.path.basename(name)
+                if base in ("ffmpeg.exe", "ffprobe.exe"):
+                    dest = ffmpeg_dir / base
+                    dest.write_bytes(z.read(name))
                     extracted += 1
                 if extracted == 2:
-                    return True
+                    break
+        return extracted >= 1
     except Exception as e:
         print(c(f"  ! Falha: {e}", C.RED))
-    return False
+        return False
 
 def check_dependencies():
     global FFMPEG_PATH, YTDLP_CMD
@@ -195,34 +255,28 @@ def check_dependencies():
         install_ytdlp()
         YTDLP_CMD = find_ytdlp()
     if YTDLP_CMD:
-        print(c("  OK yt-dlp", C.GREEN))
+        print(c("  OK yt-dlp: " + YTDLP_CMD[0], C.GREEN))
     else:
-        print(c("  ERRO: instale manualmente: pip install yt-dlp", C.RED))
+        print(c("  ERRO: nao foi possivel encontrar/instalar yt-dlp", C.RED))
         ok = False
 
     # ffmpeg
     FFMPEG_PATH = find_ffmpeg()
     if not FFMPEG_PATH:
-        print(c("  ~ ffmpeg nao encontrado. Instalando...", C.YELLOW))
         if IS_WIN:
-            install_ffmpeg_windows()
+            install_ffmpeg_windows_portable()
         elif not IS_MAC:
             install_ffmpeg_linux()
-        else:
-            print(c("  ! macOS: brew install ffmpeg", C.YELLOW))
         FFMPEG_PATH = find_ffmpeg()
     if FFMPEG_PATH:
-        print(c("  OK ffmpeg", C.GREEN))
+        print(c("  OK ffmpeg: " + FFMPEG_PATH, C.GREEN))
     else:
-        if IS_MAC:
-            print(c("  ERRO: brew install ffmpeg", C.RED))
-        else:
-            print(c("  ERRO: nao foi possivel instalar ffmpeg", C.RED))
+        print(c("  ERRO: ffmpeg nao encontrado. Rode o instalar.py novamente.", C.RED))
         ok = False
 
     return ok
 
-# ── Metadados: Odesli (nome + artista) ───────────────────────────────────────
+# ── Metadados: Odesli ─────────────────────────────────────────────────────────
 def fetch_odesli(url):
     m    = re.search(r"spotify\.com/(album|playlist|track)/", url)
     kind = m.group(1) if m else "track"
@@ -235,7 +289,7 @@ def fetch_odesli(url):
     e = ents[key]
     return kind, e.get("title", ""), e.get("artistName", "")
 
-# ── Metadados: iTunes Search API (tracklist completa, sem auth) ───────────────
+# ── Metadados: iTunes ─────────────────────────────────────────────────────────
 def fetch_itunes(artist, album):
     term   = (artist + " " + album).strip()
     params = urlencode({"term": term, "media": "music", "entity": "song",
@@ -248,26 +302,22 @@ def fetch_itunes(artist, album):
     album_low  = album.lower()
     artist_low = artist.lower()
 
-    # 1. Tenta nome EXATO
     matched = [r for r in results
                if album_low == r.get("collectionName", "").lower()
                and artist_low in r.get("artistName", "").lower()]
 
-    # 2. Relaxa para 'contém' e bloqueia ao vivos se o pedido for estúdio
     if not matched:
         matched = [r for r in results
                    if album_low in r.get("collectionName", "").lower()
                    and artist_low in r.get("artistName", "").lower()]
         if "live" not in album_low and "vivo" not in album_low:
-            matched = [r for r in matched 
-                       if "live" not in r.get("collectionName", "").lower() 
+            matched = [r for r in matched
+                       if "live" not in r.get("collectionName", "").lower()
                        and "vivo" not in r.get("collectionName", "").lower()]
 
-    # 3. Relaxa só para o artista
     if not matched:
         matched = [r for r in results
                    if artist_low in r.get("artistName", "").lower()]
-
     if not matched:
         matched = results
 
@@ -277,21 +327,17 @@ def fetch_itunes(artist, album):
     for r in matched:
         title = r.get("trackName", "")
         art   = r.get("artistName", artist)
-        
-        # Filtra os nomes sujos
-        clean_title = re.sub(r'(?i)\s*[\(\-\[].*?(remaster|live|vivo|deluxe|bonus|edit|ac[uú]stico|acoustic).*?[\)\-\]]', '', title).strip()
+        clean_title = re.sub(
+            r'(?i)\s*[\(\-\[].*?(remaster|live|vivo|deluxe|bonus|edit|ac[uú]stico|acoustic).*?[\)\-\]]',
+            '', title).strip()
         key_t = clean_title.lower()
-        
         if clean_title and key_t not in seen:
             seen.add(key_t)
-            # MÁGICA AQUI: Adiciona a palavra "Topic" na busca oculta
-            query_str = art + " - " + clean_title + " Topic"
             tracks.append({"title": clean_title, "artist": art,
-                           "query": query_str})
-            
+                           "query": art + " - " + clean_title})
     return tracks
-    
-# ── Metadados: MusicBrainz (fallback) ────────────────────────────────────────
+
+# ── Metadados: MusicBrainz ────────────────────────────────────────────────────
 def fetch_musicbrainz(artist, album):
     queries = [
         'release:"' + album + '" AND artist:"' + artist + '"',
@@ -312,8 +358,8 @@ def fetch_musicbrainz(artist, album):
         return []
 
     def score(r):
-        official = 1 if r.get("status", "").lower() == "official" else 0
-        return (official, r.get("track-count", 0))
+        return (1 if r.get("status", "").lower() == "official" else 0,
+                r.get("track-count", 0))
 
     rid = max(releases, key=score)["id"]
     try:
@@ -357,96 +403,69 @@ def fetch_ytdlp_flat(url):
     except Exception:
         return "", "", []
 
-
-# ── Busca por texto no iTunes ─────────────────────────────────────────────────
+# ── Busca por texto ───────────────────────────────────────────────────────────
 def search_and_resolve(query: str) -> dict:
-    """
-    Recebe texto livre ("metallica ride the lightning") e:
-    1. Busca no iTunes pra achar artista + album
-    2. Retorna metadados completos do album
-    """
     print_section("Buscando no iTunes: " + query + "...")
-
-    params = urlencode({
-        "term":    query,
-        "media":   "music",
-        "entity":  "song",
-        "limit":   "10",
-        "country": "BR",
-    })
+    params = urlencode({"term": query, "media": "music", "entity": "song",
+                        "limit": "10", "country": "BR"})
     try:
         data    = json.loads(http_get("https://itunes.apple.com/search?" + params))
         results = data.get("results", [])
         if not results:
-            print(c("  ✗ Nenhum resultado encontrado para: " + query, C.RED))
+            print(c("  ✗ Nenhum resultado: " + query, C.RED))
             return {}
-
-        # Pega o primeiro resultado com album
-        first   = results[0]
-        artist  = first.get("artistName", "")
-        album   = first.get("collectionName", "")
-        song    = first.get("trackName", "")
-
+        first  = results[0]
+        artist = first.get("artistName", "")
+        album  = first.get("collectionName", "")
+        song   = first.get("trackName", "")
         if not artist or not album:
-            print(c("  ✗ Nao foi possivel identificar o album.", C.RED))
             return {}
-
         print(c("  ✔ Encontrado: " + album + " — " + artist, C.GREEN))
         print(c("  (faixa: " + song + ")", C.DIM))
-
-        # Busca o album completo
         tracks = fetch_itunes(artist, album)
         if tracks:
             print(c("  ✔ " + str(len(tracks)) + " faixa(s) no album", C.GREEN))
             return {"name": album, "artist": artist, "tracks": tracks}
     except Exception as e:
-        print(c("  ✗ Erro na busca: " + str(e), C.RED))
+        print(c("  ✗ Erro: " + str(e), C.RED))
     return {}
 
 # ── Orquestracao de metadados ─────────────────────────────────────────────────
 def fetch_metadata(url):
     print_section("Buscando metadados...")
 
-    # 1. yt-dlp flat
     name, artist, tracks = fetch_ytdlp_flat(url)
     if tracks:
         print(c("  OK " + str(len(tracks)) + " faixa(s) via yt-dlp", C.GREEN))
         return {"name": name, "artist": artist, "tracks": tracks}
 
-    # 2. Odesli -> nome + artista
     kind, name, artist = "", "", ""
     try:
         kind, name, artist = fetch_odesli(url)
         if name and artist:
-            print(c("  OK identificado: " + name + " -- " + artist, C.GREEN))
+            print(c("  OK: " + name + " -- " + artist, C.GREEN))
     except Exception as e:
         print(c("  ~ Odesli falhou: " + str(e), C.YELLOW))
 
-    # 3. iTunes -> tracklist (mais rapido e confiavel)
     if name and artist and kind != "playlist":
         try:
             tracks = fetch_itunes(artist, name)
             if tracks:
                 print(c("  OK " + str(len(tracks)) + " faixa(s) via iTunes", C.GREEN))
                 return {"name": name, "artist": artist, "tracks": tracks}
-            print(c("  ~ iTunes nao encontrou faixas", C.YELLOW))
         except Exception as e:
             print(c("  ~ iTunes falhou: " + str(e), C.YELLOW))
 
-    # 4. MusicBrainz -> fallback
     if name and artist and kind != "playlist":
         try:
             tracks = fetch_musicbrainz(artist, name)
             if tracks:
                 print(c("  OK " + str(len(tracks)) + " faixa(s) via MusicBrainz", C.GREEN))
                 return {"name": name, "artist": artist, "tracks": tracks}
-            print(c("  ~ MusicBrainz nao encontrou faixas", C.YELLOW))
         except Exception as e:
             print(c("  ~ MusicBrainz falhou: " + str(e), C.YELLOW))
 
-    # 5. Faixa unica
     if name and artist:
-        print(c("  ~ Baixando como faixa unica: " + name, C.YELLOW))
         return {"name": name, "artist": artist,
                 "tracks": [{"title": name, "artist": artist,
                             "query": artist + " - " + name}]}
@@ -461,7 +480,9 @@ def progress_bar(done, total, width=22):
 
 # ── Download ──────────────────────────────────────────────────────────────────
 def download_track(query, out_dir, index):
-    out_template = str(out_dir / (str(index).zfill(3) + " - %(artist)s - %(title)s.%(ext)s"))
+    out_template = str(out_dir / (str(index).zfill(3) + " - %(title)s.%(ext)s"))
+    ffmpeg_dir   = str(Path(FFMPEG_PATH).parent)
+
     cmd = YTDLP_CMD + [
         "--no-playlist",
         "--extract-audio",
@@ -470,34 +491,50 @@ def download_track(query, out_dir, index):
         "--postprocessor-args", "ffmpeg:-b:a 320k",
         "--embed-thumbnail",
         "--add-metadata",
-        "--ffmpeg-location", FFMPEG_PATH,
+        "--ffmpeg-location", ffmpeg_dir,
         "--output", out_template,
-       # "--quiet",
-        #"--no-warnings",
         "--no-check-certificates",
-        "ytsearch1:" + query, # <-- Voltamos para o YT normal!
+        "--no-warnings",
+        "ytsearch1:" + query,
     ]
+
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=180)
+        r = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=300,
+        )
+        if r.returncode != 0:
+            # Loga o erro real para o arquivo de log (não polui o terminal)
+            log = SPOTIDOWN_DIR / "errors.log"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with open(log, "a", encoding="utf-8") as f:
+                f.write(f"\n=== {query} ===\n{r.stderr}\n")
         return r.returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
     except Exception:
         return False
 
 def download_all(tracks, out_dir):
     total = len(tracks)
-    fails = 0
+    fails = []
     print()
     for i, track in enumerate(tracks, 1):
         label = truncate(track["artist"] + " - " + track["title"])
         print("\r  " + progress_bar(i-1, total) + "  " + c(label, C.DIM) + "          ",
               end="", flush=True)
         if not download_track(track["query"], out_dir, i):
-            fails += 1
+            fails.append(track)
     print("\r  " + progress_bar(total, total) + "                                ", flush=True)
     print()
+
     if fails:
-        print(c("  ~ " + str(fails) + " faixa(s) nao encontradas no YouTube", C.YELLOW))
+        print(c(f"  ~ {len(fails)} faixa(s) com erro (veja ~/.spotidown/errors.log)", C.YELLOW))
+
     audio_exts = {".mp3", ".flac", ".ogg", ".m4a", ".opus", ".wav"}
     return [f for f in sorted(out_dir.glob("*.*")) if f.suffix.lower() in audio_exts]
 
@@ -509,7 +546,6 @@ def build_zip(files, dest_dir, zip_name):
         zip_path = dest_dir / (zip_name + " (" + str(counter) + ").zip")
         counter += 1
     print_section("Criando ZIP...")
-    print(c("  Pasta interna: " + zip_name + "/", C.DIM))
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for i, f in enumerate(files, 1):
             zf.write(f, zip_name + "/" + f.name)
@@ -524,29 +560,17 @@ def main():
 
     if "--update" in sys.argv:
         print("Atualizando o SpotiDown...")
-        
-        if shutil.which("pipx"):
-            subprocess.run(["pipx", "upgrade", "spotidown"])
-        
+        pipx = shutil.which("pipx")
+        if pipx:
+            subprocess.run([pipx, "upgrade", "spotidown"])
         else:
-            if sys.platform == "win32":
-                python_global = os.path.join(sys.base_prefix, "python.exe")
-            else:
-                python_global = os.path.join(sys.base_prefix, "bin", "python3")
-                
-            subprocess.run([python_global, "-m", "pipx", "upgrade", "spotidown"])
-            
-        sys.exit(0) 
+            subprocess.run([sys.executable, "-m", "pipx", "upgrade", "spotidown"])
+        sys.exit(0)
 
-    parser = argparse.ArgumentParser(
-        prog="spotidown",
-        description="Baixa playlists/albuns do Spotify via YouTube. Sem Premium, sem API key.",
-    )
-    parser.add_argument("url",   help="Link do Spotify OU busca por texto (ex: \"metallica ride the lightning\")")
-    parser.add_argument("pasta", nargs="?", default="~/Music",
-                        help="Pasta de destino (padrao: ~/Music)")
-    parser.add_argument("--nome", "-n", default=None,
-                        help="Sobrescreve o nome automatico do ZIP")
+    parser = argparse.ArgumentParser(prog="spotidown")
+    parser.add_argument("url",   help='Link Spotify ou busca: "metallica ride the lightning"')
+    parser.add_argument("pasta", nargs="?", default="~/Music")
+    parser.add_argument("--nome", "-n", default=None)
 
     args     = parser.parse_args()
     query    = args.url.strip()
@@ -557,15 +581,11 @@ def main():
     if not check_dependencies():
         sys.exit(1)
 
-    # Detecta se e link ou busca por texto
     is_link = "spotify.com" in query or query.startswith("http")
-    if is_link:
-        meta = fetch_metadata(query)
-    else:
-        meta = search_and_resolve(query)
+    meta    = fetch_metadata(query) if is_link else search_and_resolve(query)
+
     if not meta or not meta.get("tracks"):
         print(c("\n  ERRO: Nao foi possivel obter as faixas.", C.RED))
-        print(c("    Verifique se o link e publico no Spotify.", C.DIM))
         sys.exit(1)
 
     tracks = meta["tracks"]
@@ -576,24 +596,26 @@ def main():
     else:
         zip_name = safe_filename(meta.get("name", "download"))
 
-    print(c("\n  Destino: " + str(dest_dir), C.DIM))
-    print(c("  ZIP    : " + zip_name + ".zip", C.DIM))
-    print(c("  Faixas : " + str(len(tracks)), C.DIM))
+    print(c("\n  Destino : " + str(dest_dir), C.DIM))
+    print(c("  ZIP     : " + zip_name + ".zip", C.DIM))
+    print(c("  Faixas  : " + str(len(tracks)), C.DIM))
 
     print_section("Baixando musicas via YouTube...")
     tmp_dir = Path(tempfile.mkdtemp(prefix="spotidown_"))
     try:
         files = download_all(tracks, tmp_dir)
         if not files:
-            print(c("  ERRO: Nenhuma musica baixada.", C.RED))
+            log = SPOTIDOWN_DIR / "errors.log"
+            print(c("  ERRO: Nenhuma musica foi baixada.", C.RED))
+            print(c(f"  Detalhes do erro em: {log}", C.YELLOW))
             sys.exit(1)
         print(c("  OK " + str(len(files)) + " musica(s) baixada(s)", C.GREEN))
 
         zip_path = build_zip(files, dest_dir, zip_name)
         size_mb  = zip_path.stat().st_size / (1024 * 1024)
         print(c("\n  Concluido!", C.GREEN, C.BOLD))
-        print(c("  Arquivo: " + str(zip_path), C.CYAN))
-        print(c("  Tamanho: " + f"{size_mb:.1f}" + " MB  (" + str(len(files)) + " musica(s))", C.DIM))
+        print(c("  Arquivo : " + str(zip_path), C.CYAN))
+        print(c("  Tamanho : " + f"{size_mb:.1f}" + " MB  (" + str(len(files)) + " faixa(s))", C.DIM))
         print()
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
