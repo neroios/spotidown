@@ -472,8 +472,8 @@ def download_track(query, out_dir, index):
         "--add-metadata",
         "--ffmpeg-location", FFMPEG_PATH,
         "--output", out_template,
-        "--quiet",
-        "--no-warnings",
+       # "--quiet",
+        #"--no-warnings",
         "--no-check-certificates",
         "ytsearch1:" + query, # <-- Voltamos para o YT normal!
     ]
