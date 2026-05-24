@@ -82,3 +82,19 @@ spotidown --update
 
 Ou rode o `instalar.py` novamente.
 
+## Desinstalar
+
+# Linux / macOS
+```
+curl -O https://raw.githubusercontent.com/neroios/spotidown/main/uninstall.py && python3 uninstall.py
+```
+ou execute o desinstalador: python3 uninstall.py
+
+
+# Windows
+```
+Invoke-WebRequest -Uri "..." -OutFile uninstall.py; python uninstall.py
+```
+ou execute o desinstalador: python uninstall.py
+
+
