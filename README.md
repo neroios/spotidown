@@ -48,7 +48,7 @@ Feche e reabra o terminal depois. Pronto.
 ```
 spotidown "nome da música ou álbum"
 spotidown "angra fireworks"
-spotidown "metallica ride the lightning"
+spotidown "metallica for whom the bell tolls"
 spotidown "https://open.spotify.com/album/xxx"
 ```
 
